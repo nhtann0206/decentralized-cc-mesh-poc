@@ -1,115 +1,55 @@
 # Decentralized Confidential-Compute Mesh — PoC Extracts
 
-A portfolio extract of work I did in 2026 on a decentralized "compute marketplace" project: a mesh of home-run nodes that rent each other VMs and AI inference, settle in Lightning sats, and use hardware-rooted Confidential Compute (CC) so the renter can verify the operator isn't reading their workload.
+A portfolio extract from work I did in 2026 on a decentralized "compute marketplace": a mesh of home-run nodes that rent each other VMs and AI inference, settle in Lightning sats, and use hardware-rooted Confidential Compute (CC) so the renter can cryptographically verify the operator isn't reading their workload.
 
-This repo is **not the full product** — it's a curated set of artefacts (code, infra, write-ups) from the slices I owned, published with the project owner's awareness as a record of what I built and what I learned.
-
----
-
-## The product context (in one paragraph)
-
-Imagine a mesh of small Linux boxes — Raspberry Pi 5s, Radxa boards, mini-x86 — each running the same OS. Any of them can be an "operator" (rent its CPU/RAM/GPU to others) or a "renter" (consume someone else's compute). Trades are paid per minute in Lightning sats. The novel part isn't the marketplace, it's the **trust shape**: before the renter sends data, the operator's box has to prove cryptographically — using its CPU's secure-enclave hardware — that the OS image being run is the audited one, no operator tampering possible. The renter's browser verifies this *itself*, against the chip vendor's root of trust. That's "real" CC, as opposed to "we promise we don't peek."
-
-I contracted on this project for ~3 months (2026-02-15 → 2026-05-03, 233 commits) and owned the CC integration end-to-end. The first cut of this README only covered the final 2 weeks; the sections below now cover the full arc.
+This repo is **not the full product** — it's a curated set of the slices I owned end-to-end, published as a record of what I built.
 
 ---
 
-## Map of the 3-month arc
+## The product, in one paragraph
 
-| When | Block | Lines | Folder |
-|---|---|---|---|
-| 2026-02-15 → 02-16 | **TEE foundation** — `HardwareTrust` trait + mock providers + attestation HTTP endpoints. The substrate every later CC piece plugged into. | ~700 | [`tee-foundation/`](tee-foundation/) |
-| 2026-02-23 → 03-03 | **HybridSigner** — LDK custom signer with hardware-backed channel keys, fail-closed circuit breaker, sync↔async strategy (R-002), post-restart channel verification. The single most security-sensitive piece. | ~1100 + spec docs | [`hybrid-signer/`](hybrid-signer/) |
-| 2026-02-27 (+ 03-31 simplify) | **SLM edge inference** — on-node Small Language Model module: routing, lifecycle, memory accounting, metrics, Ollama provider. Stakeholder cut the 3-tier auto-fallback mid-design. | ~2000 + spec | [`slm-edge-inference/`](slm-edge-inference/) |
-| 2026-04-17 → 04-19 | **Cross-node VM rental M2–M4** — KVM libvirt provider, pause/resume billing state machine, BOLT12 per-minute billing (Alice timer + Bob verification), cross-node L402 auth, peer-workspace UI. | ~3000 + 2 migrations + 2 tests + frontend | [`cross-node-rental/`](cross-node-rental/) |
-| 2026-04-20 | **noVNC desktop streaming** — QEMU VNC over WebSocket proxy + tenant desktop image bake. Turned the rental flow into a one-click consumer experience. | architecture doc + bake script | [`novnc-streaming/`](novnc-streaming/) |
-| 2026-04-22 → 05-03 | **Phase A — Cloud SEV-SNP shipped** | (below) | [`phase-a-cloud-cc/`](phase-a-cloud-cc/) |
-| 2026-05-03 weekend | **Phase C — RK3566 hardware bring-up attempt (blocked by 3 vendor gates, characterised empirically)** | (below) | [`phase-c-rk3566-attempt/`](phase-c-rk3566-attempt/) |
-
-Each folder has its own README explaining what's inside, why it was hard, and which commits hold the work. Order in the table above is chronological; the most security-sensitive piece is `hybrid-signer/` and the most security-significant *shipped* piece is `phase-a-cloud-cc/`.
+Imagine a mesh of small Linux boxes — Raspberry Pi 5s, Radxa boards, mini-x86 — each running the same OS. Any of them can be an *operator* (rent its CPU/RAM/GPU to others) or a *renter* (consume someone else's compute). Trades are paid per minute in Lightning sats. The novel part isn't the marketplace, it's the **trust shape**: before the renter sends data, the operator's box has to prove cryptographically — using its CPU's secure-enclave hardware — that the OS image being run is the audited one, no operator tampering possible. The renter's browser verifies this *itself*, against the chip vendor's root of trust. That's "real" CC, as opposed to "we promise we don't peek." I owned the CC integration end-to-end across the contract.
 
 ---
 
-## What I shipped — final two weeks (the original cut of this README)
+## What's inside
 
-### Phase A — Cloud SEV-SNP, real attestation, end-to-end demo
+Each folder is a distinct slice of the product. Read the folder's README for the full story; the one-liners below are the elevator pitch.
 
-A live demo where Alice (renter, in her browser) rents a VM from Bob (operator, running in a Google Cloud N2D-Milan SEV-SNP machine), sees an attestation badge verify against the AMD root certificate chain locally in her browser, clicks Start, and within ~60s is staring at a Linux desktop streamed in over noVNC. Not a mock — Alice's backend pulls the raw SEV-SNP report + ARK/ASK/VCEK chain over L402, verifies the AMD ECDSA P-384 signatures with the `sev` Rust crate, and the badge only goes green if the chain is valid and the report's `report_data` matches the per-session nonce.
+### [`tee-foundation/`](tee-foundation/)
+**The substrate every later CC piece plugged into.** A polymorphic trait (`HardwareTrust`) for hardware-rooted attestation, mock implementations for CI/dev, and the HTTP surface the rental flow calls when it needs a fresh attestation report. The trait shape is what kept the marketplace UI/backend identical whether the operator's hardware was AMD SEV-SNP, ARM TrustZone, or a future RISC-V target.
 
-What's reproduced here:
+### [`hybrid-signer/`](hybrid-signer/)
+**The Lightning channel keys live in hardware, not process memory.** A custom signer for the Lightning Development Kit (LDK) that holds the channel-private seed in a secure element or TEE, drops cleanly into LDK's `NodeBuilder` without forking it, bridges the sync↔async impedance mismatch between LDK's signer API and async I2C transport, and fails closed for big-money HTLCs while staying useful for tiny routing fees if the hardware path degrades. The most security-sensitive piece of the contract and the one I'm proudest of.
 
-- [`phase-a-cloud-cc/backend/sev_snp_verifier.rs`](phase-a-cloud-cc/backend/sev_snp_verifier.rs) — the verifier
-- [`phase-a-cloud-cc/frontend/`](phase-a-cloud-cc/frontend/) — the React 19 panel + hook that renders the badge against a provider-polymorphic attestation DTO (so a future ARM/RISC-V provider drops in without UI rework)
-- [`phase-a-cloud-cc/infra/cc-host/`](phase-a-cloud-cc/infra/cc-host/) — bootstrap script that pulls a fresh attestation report on the host + fetches AMD's KDS certs
-- [`phase-a-cloud-cc/infra/cc-tenant/`](phase-a-cloud-cc/infra/cc-tenant/) — Packer image bake + spawn script that cut tenant cold-boot from 10–15 min to ~60s
-- [`sprint-reports/2026-05-02-phase-a-shipped.md`](sprint-reports/2026-05-02-phase-a-shipped.md) — the end-of-phase report
+### [`slm-edge-inference/`](slm-edge-inference/)
+**Small Language Model inference on the node itself, as a metered service.** Operators set a memory budget; the module picks which models fit, manages their lifecycle (load on demand, evict under pressure, drain in-flight requests before swap), exposes them on the API as just-another-provider so the agent framework calls them the same way it calls a cloud LLM. Lets a home node sell inference for sats without phoning home to OpenAI.
 
-### Phase C — Same flow, but on a $15 Radxa Zero 3W (the bring-up attempt)
+### [`cross-node-rental/`](cross-node-rental/)
+**The marketplace mechanics — how one node rents a VM from another, billed per minute over Lightning.** KVM/libvirt provider with idempotent pause/resume, a billing state machine that survives crashes and reconciles cleanly, BOLT12-based per-minute settlement (the renter's timer, the operator's verification, the events that tie them to the LDK builtin app), cross-node L402 authentication so an unknown renter is auto-onboarded on first request, and the peer-workspace UI that puts a face on all of it.
 
-This was the differentiator: prove the same chip-rooted attestation works on a small ARM SBC, not just on cloud hardware, so the marketplace can be genuinely decentralized rather than "cloud with extra steps." Target: Rockchip RK3566, OP-TEE on the TrustZone secure world, a custom Trusted Application doing the attestation.
+### [`novnc-streaming/`](novnc-streaming/)
+**Click Start, see your rented Linux desktop in the browser tab within a minute.** A WebSocket proxy that forwards binary RFB frames from a tenant VM's VNC server out to a noVNC client in the renter's browser, plus the desktop-image bake script that makes the tenant boot fast enough for "one-click" to actually feel one-click. This is the change that turned the product from "IaaS for technical people" into "rent a computer like you rent a parking spot."
 
-I did not deliver this. What I delivered instead was a **clean empirical characterisation of why it doesn't work on this chip with vendor-shipped firmware**, hard enough that the next engineer can skip the dead-ends. Three independent vendor-controlled gates, confirmed individually:
+### [`phase-a-cloud-cc/`](phase-a-cloud-cc/)
+**Real Confidential Compute on the rental flow, demoable end-to-end.** Renter rents a VM hosted on an AMD SEV-SNP machine; renter's browser pulls the raw attestation report plus the AMD certificate chain, verifies the AMD ECDSA signatures *locally*, only goes green if the chain validates and the report binds to the per-session nonce. Then noVNC streams the desktop in. No mock, no "trust me" — verifiable.
 
-1. **Upstream OP-TEE doesn't boot on RK3566.** The plat-rockchip port for this SoC doesn't exist in the upstream tree. I added a minimum-viable port ([`platform_rk3566.c`](phase-c-rk3566-attempt/plat-rockchip-rk3566/platform_rk3566.c) + [`platform_config` block](phase-c-rk3566-attempt/plat-rockchip-rk3566/platform_config_rk3566_block.h) + [`conf.mk` block](phase-c-rk3566-attempt/plat-rockchip-rk3566/conf_rk3566_block.mk)) and got it to build clean and flash correctly — but the CPU never reaches instruction 1 of `_start`. I confirmed this with a UART poke patched directly into the very first instruction of `entry_a64.S`: silent. The BL31→BL32 handoff dies before any C code runs. Community ports for this SoC family don't exist either.
-2. **The vendor's shipped BL32 binary refuses all our TA signing keys.** I pivoted to working with the firmware as-shipped — wrote a real attestation TA ([`node_attestation_ta.c`](phase-c-rk3566-attempt/node-attestation-ta/ta/node_attestation_ta.c): persistent RSA-2048 keypair via `TEE_STORAGE_PRIVATE`, RSASSA-PSS-SHA256 sign on a nonce+measurement) and a libteec smoke-test client ([`smoke_test.c`](phase-c-rk3566-attempt/node-attestation-ta/host/smoke_test.c)). Both built and signed cleanly. Vendor BL32 rejected the TA with `0xffff000f origin=3` (`TEEC_ERROR_TARGET_DEAD`) using two different candidate signing keys (upstream master + OP-TEE 3.13 default; MD5-distinct, so I know I tried different things). The vendor's signing key is closed.
-3. **The vendor's BL32 has no built-in attestation primitives we could call instead.** I probed 10 candidate Pseudo-TA UUIDs (attestation, sealed-key storage, fTPM, secure storage, vendor-specific Widevine/OEM_CRYPTO) — only `PTA_SYSTEM` responds. Everything attestation-related is stripped from the build. Linux's `keyctl` TEE-backed trusted-keys subsystem is also not in the kernel image.
+### [`phase-c-rk3566-attempt/`](phase-c-rk3566-attempt/)
+**The same flow attempted on a $15 ARM SBC — and why it doesn't work on this chip.** The differentiator for the decentralized story is that operators run on small home hardware, not just cloud. I attempted to bring the same chip-rooted attestation up on a Radxa Zero 3W (Rockchip RK3566). It does not work, for three independent vendor-controlled reasons that I characterised empirically and documented as a reusable playbook for any future hardware target.
 
-The reusable artefact from Phase C is the playbook in [`docs/op-tee-rk3566-bring-up-playbook.md`](docs/op-tee-rk3566-bring-up-playbook.md) — written as a template ("here's how you bring CC up on any SoC the mesh later adopts"), not as a board-specific cookbook. It documents the hardware variables you have to pin down for any new chip, the firmware substrate you need, and the questions to answer before you spend a sprint on it.
+### [`docs/`](docs/) and [`sprint-reports/`](sprint-reports/)
+The OP-TEE bring-up playbook (written as a template for any future SoC, not a board-specific cookbook), and three end-of-sprint reports written in the voice they were originally delivered in.
 
-End-of-phase write-up: [`sprint-reports/2026-05-03-phase-c-walls.md`](sprint-reports/2026-05-03-phase-c-walls.md).
+---
 
-### Adjacent: marketplace work the week before
+## Tech surface
 
-[`sprint-reports/2026-04-26-marketplace.md`](sprint-reports/2026-04-26-marketplace.md) — the sprint before Phase A, covering the rental-flow UI, polymorphic attestation DTO design, and the first R-012 firmware substrate validation on Radxa. Included here for continuity.
+Rust (Axum, Tokio, Diesel ORM, custom LDK fork) for the backend; C for the OP-TEE Trusted Application and the plat-rockchip port; React 19 + TypeScript for the renter-facing UI; GCP + Packer + libvirt for the infrastructure layer; AMD SEV-SNP, ARM TrustZone, Lightning Network (BOLT12) as the protocol substrates touched.
 
 ---
 
 ## What's not here
 
-- The full product codebase (mesh primitives, gossip protocols, capability router, L402 micropayment middleware, builtin apps, AI agent system, the broader marketplace) — that belongs to the project owner and isn't mine to redistribute. Everything in this repo is code paths I authored, infra I wrote, or write-ups I produced.
-- Live demo coordinates (public IPs, peer pubkeys) are redacted in the sprint reports. The demo flow is real, but the specific deployment is the owner's to keep or take down.
-- The full R-012 PoC report (the playbook here is the deliverable extracted from it).
-
----
-
-## Tech surface (so you can scan the stack)
-
-- **Rust** (Axum 0.8, Tokio 1.38, Diesel 2.1, custom LDK fork for Lightning) — backend, the verifier crate, the OP-TEE host-side smoke-test
-- **C / OP-TEE 4.x** — the Trusted Application (GlobalPlatform TEE Internal API: `TEE_GenerateKey`, persistent objects, RSASSA-PSS), the plat-rockchip port
-- **React 19 + TypeScript 5.8 + Tailwind 4** — provider-polymorphic attestation panel
-- **GCP / Packer / gcloud** — Phase A infra
-- **AMD SEV-SNP** — ARK/ASK/VCEK chain verification, snpguest, KDS
-- **ARM TrustZone / TF-A / u-boot mainline (FIT, binman)** — Phase C boot-chain bring-up
-- **Lightning** — the marketplace settlement layer (touched at the protocol boundary; not extracted here)
-
----
-
-## Layout
-
-```
-.
-├── README.md                       — this file
-├── docs/
-│   └── op-tee-rk3566-bring-up-playbook.md
-├── phase-a-cloud-cc/
-│   ├── backend/sev_snp_verifier.rs
-│   ├── frontend/
-│   └── infra/
-│       ├── cc-host/bootstrap.sh
-│       └── cc-tenant/{packer/, spawn.sh, startup-script.sh, README.md}
-├── phase-c-rk3566-attempt/
-│   ├── plat-rockchip-rk3566/       — OP-TEE OS port (excerpts)
-│   └── node-attestation-ta/        — TA + libteec smoke-test client
-└── sprint-reports/
-    ├── 2026-04-26-marketplace.md
-    ├── 2026-05-02-phase-a-shipped.md
-    └── 2026-05-03-phase-c-walls.md
-```
-
----
-
-## License & credit
-
-The OP-TEE port files and the TA are BSD-2-Clause (matching the upstream OP-TEE project, which I was extending). The Rust verifier and React components are MIT for the parts I authored. Sprint reports and the playbook are CC-BY-4.0.
+The full product codebase — mesh primitives, gossip, capability router, L402 micropayment middleware, the broader agent system, the rest of the marketplace — belongs to the project owner and isn't mine to redistribute. Everything in this repo is code I authored or co-authored, infrastructure I wrote, or write-ups I produced. Live demo coordinates (IPs, peer pubkeys) are redacted.
 
 Written by Tan Nguyen Huu &lt;nguyenhuutan262004@gmail.com&gt;, 2026.
