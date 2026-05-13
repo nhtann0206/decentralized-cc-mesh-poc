@@ -10,11 +10,27 @@ This repo is **not the full product** — it's a curated set of artefacts (code,
 
 Imagine a mesh of small Linux boxes — Raspberry Pi 5s, Radxa boards, mini-x86 — each running the same OS. Any of them can be an "operator" (rent its CPU/RAM/GPU to others) or a "renter" (consume someone else's compute). Trades are paid per minute in Lightning sats. The novel part isn't the marketplace, it's the **trust shape**: before the renter sends data, the operator's box has to prove cryptographically — using its CPU's secure-enclave hardware — that the OS image being run is the audited one, no operator tampering possible. The renter's browser verifies this *itself*, against the chip vendor's root of trust. That's "real" CC, as opposed to "we promise we don't peek."
 
-I contracted on this project for ~3 months and owned the CC integration end-to-end.
+I contracted on this project for ~3 months (2026-02-15 → 2026-05-03, 233 commits) and owned the CC integration end-to-end. The first cut of this README only covered the final 2 weeks; the sections below now cover the full arc.
 
 ---
 
-## What I shipped
+## Map of the 3-month arc
+
+| When | Block | Lines | Folder |
+|---|---|---|---|
+| 2026-02-15 → 02-16 | **TEE foundation** — `HardwareTrust` trait + mock providers + attestation HTTP endpoints. The substrate every later CC piece plugged into. | ~700 | [`tee-foundation/`](tee-foundation/) |
+| 2026-02-23 → 03-03 | **HybridSigner** — LDK custom signer with hardware-backed channel keys, fail-closed circuit breaker, sync↔async strategy (R-002), post-restart channel verification. The single most security-sensitive piece. | ~1100 + spec docs | [`hybrid-signer/`](hybrid-signer/) |
+| 2026-02-27 (+ 03-31 simplify) | **SLM edge inference** — on-node Small Language Model module: routing, lifecycle, memory accounting, metrics, Ollama provider. Stakeholder cut the 3-tier auto-fallback mid-design. | ~2000 + spec | [`slm-edge-inference/`](slm-edge-inference/) |
+| 2026-04-17 → 04-19 | **Cross-node VM rental M2–M4** — KVM libvirt provider, pause/resume billing state machine, BOLT12 per-minute billing (Alice timer + Bob verification), cross-node L402 auth, peer-workspace UI. | ~3000 + 2 migrations + 2 tests + frontend | [`cross-node-rental/`](cross-node-rental/) |
+| 2026-04-20 | **noVNC desktop streaming** — QEMU VNC over WebSocket proxy + tenant desktop image bake. Turned the rental flow into a one-click consumer experience. | architecture doc + bake script | [`novnc-streaming/`](novnc-streaming/) |
+| 2026-04-22 → 05-03 | **Phase A — Cloud SEV-SNP shipped** | (below) | [`phase-a-cloud-cc/`](phase-a-cloud-cc/) |
+| 2026-05-03 weekend | **Phase C — RK3566 hardware bring-up attempt (blocked by 3 vendor gates, characterised empirically)** | (below) | [`phase-c-rk3566-attempt/`](phase-c-rk3566-attempt/) |
+
+Each folder has its own README explaining what's inside, why it was hard, and which commits hold the work. Order in the table above is chronological; the most security-sensitive piece is `hybrid-signer/` and the most security-significant *shipped* piece is `phase-a-cloud-cc/`.
+
+---
+
+## What I shipped — final two weeks (the original cut of this README)
 
 ### Phase A — Cloud SEV-SNP, real attestation, end-to-end demo
 
